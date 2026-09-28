@@ -47,12 +47,37 @@
     .result-card .translated { font-size: 16px; line-height: 1.6; white-space: pre-wrap; background: #f8f8f8; padding: 15px; border-radius: 8px; }
     .save-section { margin-top: 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     .save-section input { flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+    
+    /* 文章列表样式 - 优化这里 */
     .article-list { display: flex; flex-direction: column; gap: 15px; }
     .article-item { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
     .article-item .title { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
     .article-item .tags { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 15px; }
     .article-item .tag { background: #eef2ff; color: var(--accent); padding: 3px 10px; border-radius: 12px; font-size: 12px; }
-    .article-item .translated-text { font-size: 15px; line-height: 1.6; white-space: pre-wrap; max-height: 200px; overflow: hidden; text-overflow: ellipsis; }
+    
+    /* 文本默认只显示4行 */
+    .article-item .translated-text { 
+        font-size: 15px; 
+        line-height: 1.6; 
+        white-space: pre-wrap; 
+        display: -webkit-box;
+        -webkit-line-clamp: 4; /* 默认显示4行 */
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    /* 展开后显示全部 */
+    .article-item .translated-text.expanded {
+        -webkit-line-clamp: unset;
+        overflow: visible;
+    }
+    /* 展开/收起按钮样式 */
+    .toggle-btn {
+        background: none; border: none; color: var(--accent); cursor: pointer;
+        font-size: 13px; font-weight: 500; padding: 5px 0; margin-top: 5px; display: block;
+    }
+    .toggle-btn:hover { text-decoration: underline; }
+    
     .article-item .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px; }
     .empty-tip { text-align: center; color: var(--text-sub); padding: 40px; }
     @media (max-width: 768px) {
@@ -169,7 +194,6 @@ document.getElementById("input-image").onchange = (e) => {
     }
 };
 
-// 配置 AI API
 document.getElementById("settings-btn").onclick = () => {
     const url = prompt(
         "1. 请输入 API 地址：\n" +
@@ -214,14 +238,12 @@ document.getElementById("translate-btn").onclick = async function() {
             const url = document.getElementById("input-url").value.trim();
             if (!url) throw new Error("请输入网址");
             
-            // 使用更稳定的 CORS 代理抓取网页
             const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
             
             const res = await fetch(proxyUrl);
             const html = await res.text();
             const doc = new DOMParser().parseFromString(html, "text/html");
             
-            // 尝试获取主要文章内容
             textToTranslate = doc.body.innerText.replace(/\s+/g, ' ').trim().substring(0, 5000);
             if (!textToTranslate) throw new Error("无法从该网页提取文本");
         }
@@ -230,7 +252,6 @@ document.getElementById("translate-btn").onclick = async function() {
             if (!file) throw new Error("请先选择图片");
             statusMsg.textContent = "正在识别图片中的文字 (OCR)...";
             
-            // 加载韩文和英文语言包
             const worker = await Tesseract.createWorker('kor+eng');
             
             const ret = await worker.recognize(file);
@@ -250,7 +271,6 @@ document.getElementById("translate-btn").onclick = async function() {
 
         let translatedText = "";
         
-        // 使用配置的 AI 接口
         if (aiConfig.url && aiConfig.key && aiConfig.model) {
             statusMsg.textContent = "正在通过 AI 翻译...";
             const response = await fetch(aiConfig.url, {
@@ -268,7 +288,6 @@ document.getElementById("translate-btn").onclick = async function() {
             if (data.error) throw new Error("AI 接口报错: " + data.error.message);
             translatedText = data.choices[0].message.content;
         } else {
-            // 备用：免费翻译接口
             statusMsg.textContent = "正在通过免费接口翻译（限制较多）...";
             const response = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(textToTranslate)}&langpair=auto|zh-CN`);
             const data = await response.json();
@@ -345,14 +364,31 @@ function renderArticles() {
     let filtered = articles;
     if (currentTag !== 'all') { filtered = articles.filter(a => a.tags && a.tags.includes(currentTag)); }
     if (filtered.length === 0) { list.innerHTML = `<div class="empty-tip">还没有保存的文章，快去翻译一篇吧 ♡</div>`; return; }
+    
     list.innerHTML = filtered.map(a => `
         <div class="article-item">
             <div class="title">${escapeHTML(a.title)}</div>
             <div class="tags">${a.tags ? a.tags.split(',').map(t => `<span class="tag">${escapeHTML(t.trim())}</span>`).join('') : ''}</div>
-            <div class="translated-text">${escapeHTML(a.translated_text)}</div>
+            
+            <!-- 给文本加上 id，并引入展开/收起按钮 -->
+            <div class="translated-text" id="text-${a.id}">${escapeHTML(a.translated_text)}</div>
+            ${a.translated_text.length > 100 ? `<button class="toggle-btn" onclick="toggleExpand('${a.id}', this)">展开全文 ▾</button>` : ''}
+            
             <div class="actions"><button class="btn btn-danger btn-sm" onclick="deleteArticle('${a.id}')">删除</button></div>
         </div>
     `).join("");
+}
+
+// 展开/收起逻辑
+function toggleExpand(id, btn) {
+    const textEl = document.getElementById('text-' + id);
+    if (textEl.classList.contains('expanded')) {
+        textEl.classList.remove('expanded');
+        btn.textContent = '展开全文 ▾';
+    } else {
+        textEl.classList.add('expanded');
+        btn.textContent = '收起 ▴';
+    }
 }
 
 function escapeHTML(text) { return String(text || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
