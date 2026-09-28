@@ -99,10 +99,11 @@
         <div class="input-area" id="area-image">
             <input type="file" id="input-image" accept="image/*">
             <img class="preview" id="image-preview">
-            <p style="font-size:12px;color:var(--text-sub);margin-top:5px;">* 图片识别支持英文，中文识别精度较低，请耐心等待</p>
+            <p style="font-size:12px;color:var(--text-sub);margin-top:5px;">* 支持中、韩、英等多语言混合识别，首次使用需加载语言包</p>
         </div>
         <div class="input-area" id="area-url">
             <input type="text" id="input-url" placeholder="输入网址，例如 https://example.com/article">
+            <p style="font-size:12px;color:var(--text-sub);margin-top:5px;">* 部分网站有反爬机制，可能无法抓取，可尝试复制文本手动输入</p>
         </div>
         <div class="input-area" id="area-file">
             <input type="file" id="input-file" accept=".txt,.md">
@@ -168,20 +169,29 @@ document.getElementById("input-image").onchange = (e) => {
     }
 };
 
+// 配置 AI API
 document.getElementById("settings-btn").onclick = () => {
-    const url = prompt("请输入 AI API 地址 (如 DeepSeek: https://api.deepseek.com/chat/completions，留空则使用免费翻译)", aiConfig.url || "");
+    const url = prompt(
+        "1. 请输入 API 地址：\n" +
+        "（DeepSeek 填：https://api.deepseek.com/chat/completions\n" +
+        "Gemini 填：https://generativelanguage.googleapis.com/v1beta/openai/chat/completions）\n" +
+        "留空则使用免费翻译", aiConfig.url || "");
     if (url === null) return;
-    const key = prompt("请输入 API Key (留空则使用免费翻译)", aiConfig.key || "");
+    
+    const key = prompt("2. 请输入 API Key：", aiConfig.key || "");
     if (key === null) return;
     
+    const model = prompt("3. 请输入模型名称：\n（DeepSeek 填 deepseek-chat\nGemini 填 gemini-1.5-flash）", aiConfig.model || "deepseek-chat");
+    if (model === null) return;
+    
     if (url && key) {
-        aiConfig = { url, key };
+        aiConfig = { url, key, model };
         localStorage.setItem('aiConfig', JSON.stringify(aiConfig));
-        alert("AI 配置已保存！");
+        alert("AI 配置已保存！重新翻译即可生效。");
     } else {
         localStorage.removeItem('aiConfig');
         aiConfig = {};
-        alert("已切换为免费翻译模式。");
+        alert("已切换为免费翻译模式（免费模式限制多，建议配置 AI）。");
     }
 };
 
@@ -203,10 +213,15 @@ document.getElementById("translate-btn").onclick = async function() {
         else if (currentInputType === 'url') {
             const url = document.getElementById("input-url").value.trim();
             if (!url) throw new Error("请输入网址");
-            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+            
+            // 使用更稳定的 CORS 代理抓取网页
+            const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
+            
             const res = await fetch(proxyUrl);
             const html = await res.text();
             const doc = new DOMParser().parseFromString(html, "text/html");
+            
+            // 尝试获取主要文章内容
             textToTranslate = doc.body.innerText.replace(/\s+/g, ' ').trim().substring(0, 5000);
             if (!textToTranslate) throw new Error("无法从该网页提取文本");
         }
@@ -214,7 +229,10 @@ document.getElementById("translate-btn").onclick = async function() {
             const file = document.getElementById("input-image").files[0];
             if (!file) throw new Error("请先选择图片");
             statusMsg.textContent = "正在识别图片中的文字 (OCR)...";
-            const worker = await Tesseract.createWorker('eng');
+            
+            // 加载韩文和英文语言包
+            const worker = await Tesseract.createWorker('kor+eng');
+            
             const ret = await worker.recognize(file);
             textToTranslate = ret.data.text.trim();
             await worker.terminate();
@@ -231,13 +249,15 @@ document.getElementById("translate-btn").onclick = async function() {
         statusMsg.textContent = "正在翻译...";
 
         let translatedText = "";
-        if (aiConfig.url && aiConfig.key) {
-            // 使用 AI 翻译
+        
+        // 使用配置的 AI 接口
+        if (aiConfig.url && aiConfig.key && aiConfig.model) {
+            statusMsg.textContent = "正在通过 AI 翻译...";
             const response = await fetch(aiConfig.url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiConfig.key}` },
                 body: JSON.stringify({
-                    model: "deepseek-chat",
+                    model: aiConfig.model,
                     messages: [
                         { role: "system", content: "你是一个专业的翻译助手。请将用户提供的文本翻译成流畅自然的中文，只需输出翻译结果，不要添加任何解释。" },
                         { role: "user", content: textToTranslate }
@@ -248,7 +268,8 @@ document.getElementById("translate-btn").onclick = async function() {
             if (data.error) throw new Error("AI 接口报错: " + data.error.message);
             translatedText = data.choices[0].message.content;
         } else {
-            // 使用免费的 MyMemory 翻译接口
+            // 备用：免费翻译接口
+            statusMsg.textContent = "正在通过免费接口翻译（限制较多）...";
             const response = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(textToTranslate)}&langpair=auto|zh-CN`);
             const data = await response.json();
             if (data.responseStatus !== 200) throw new Error("免费翻译失败: " + data.responseDetails);
